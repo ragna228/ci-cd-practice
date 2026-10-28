@@ -17,8 +17,10 @@ def save_tasks(tasks, path="tasks.json"):
 
 
 def add_task(title, tasks):
-    # Пустое название теперь ДОПУСКАЕТСЯ (мы сломали логику)
-    task = {"title": title.strip() if title else "", "done": False}
+    """Добавляет задачу. Пустое название отклоняется."""
+    if not title or not title.strip():
+        raise ValueError("Название задачи не может быть пустым")
+    task = {"title": title.strip(), "done": False}
     tasks.append(task)
     return task
 
