@@ -1,0 +1,96 @@
+name: Python CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Print versions
+        run: |
+          python --version
+          echo "Commit SHA: $GITHUB_SHA"
+          echo "Run ID: $GITHUB_RUN_ID"
+      - name: Check Python syntax
+        run: python -m compileall -q task_app.py tests
+      - name: Variant 1 extra check
+        run: |
+          python -m py_compile task_app.py
+          for f in tests/*.py; do python -m py_compile "$f"; done
+
+  test:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+  package:
+    needs: test
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build dist and manifest
+        run: |
+          mkdir dist
+          cp task_app.py README.md Dockerfile tasks.json.example dist/
+          printf 'commit=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > dist/manifest.txt
+          echo "Files:" >> dist/manifest.txt
+          ls -l dist >> dist/manifest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy_test:
+    needs: package
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: test
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-${{ github.sha }}
+          path: deploy/test
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check secrets
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+          APP_PORT: ${{ secrets.APP_PORT }}
+        run: |
+          test -n "$DEPLOY_TOKEN"
+          test -n "$APP_PORT"
+          echo "Secrets verified (values masked)"
+      - name: Smoke test (Вариант 1)
+        working-directory: deploy/test
+        run: |
+          python task_app.py --help || python task_app.py list
+          echo '{"title":"smoke test","done":false}' > /tmp/test_task.json
+          cat /tmp/test_task.json
+          printf 'Smoke test passed\n' > deployment.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-${{ github.run_id }}
+          path: deploy/test/deployment.txt
